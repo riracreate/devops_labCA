@@ -1,0 +1,60 @@
+# Production deployment, used by scripts/deploy.sh (pipeline stage 5).
+#
+# No Toxiproxy here: in production the app talks to PostgreSQL and Redis
+# directly, with the production timeouts and circuit breaker settings that the
+# resilience suite verified.
+#
+#   APP_IMAGE=ghcr.io/<owner>/<repo>:sha-abc1234 bash scripts/deploy.sh
+
+name: catalog-prod
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: catalog
+      POSTGRES_USER: catalog
+      # Only applied when the data volume is first created.
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-catalog}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U catalog -d catalog"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    image: ${APP_IMAGE:-catalog-api:local}
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: catalog
+      DB_USER: catalog
+      DB_PASSWORD: ${DB_PASSWORD:-catalog}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      LOG_LEVEL: INFO
+    ports:
+      - "${APP_PORT:-8080}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:

@@ -1,0 +1,94 @@
+# Development and demo stack.
+#
+#   docker compose up -d --build      then open http://localhost:8000
+#
+# The app reaches PostgreSQL and Redis *through Toxiproxy*, so faults can be
+# injected at any moment (bash scripts/chaos-demo.sh, or the test suite).
+# Production does not use Toxiproxy: see deploy/docker-compose.prod.yml.
+#
+#   Requests -> app:8000 -> toxiproxy:15432 -> postgres:5432
+#                        -> toxiproxy:16379 -> redis:6379
+
+name: resilience-lab
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: catalog
+      POSTGRES_USER: catalog
+      POSTGRES_PASSWORD: catalog
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U catalog -d catalog"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.13.0
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+    configs:
+      - source: toxiproxy-proxies
+        target: /config/toxiproxy.json
+    ports:
+      - "8474:8474" # control API: used by the tests and the chaos demo
+    healthcheck:
+      test: ["CMD", "/toxiproxy-cli", "list"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  app:
+    build:
+      context: .
+      target: runtime
+      args:
+        APP_VERSION: ${APP_VERSION:-local}
+    image: ${APP_IMAGE:-catalog-api:local}
+    environment:
+      DB_HOST: toxiproxy
+      DB_PORT: "15432"
+      DB_NAME: catalog
+      DB_USER: catalog
+      DB_PASSWORD: catalog
+      REDIS_HOST: toxiproxy
+      REDIS_PORT: "16379"
+      # Demo-friendly values: an open circuit stays visible on the dashboard
+      # for 5 s, and cached products count as fresh for 10 s.
+      CB_RESET_TIMEOUT_SECONDS: "5"
+      CACHE_FRESH_SECONDS: "10"
+    ports:
+      - "8000:8000"
+    depends_on:
+      toxiproxy:
+        condition: service_healthy
+
+# Proxy definitions are injected into the Toxiproxy container by Compose (no
+# bind mount), so this also works when Docker runs on another host, e.g. a
+# Jenkins container talking to the host's Docker daemon.
+configs:
+  toxiproxy-proxies:
+    content: |
+      [
+        {"name": "postgres", "listen": "0.0.0.0:15432", "upstream": "postgres:5432", "enabled": true},
+        {"name": "redis", "listen": "0.0.0.0:16379", "upstream": "redis:6379", "enabled": true}
+      ]
+
+volumes:
+  pgdata:

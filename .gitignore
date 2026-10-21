@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+
+# Test and pipeline output
+reports/
+images.tar.gz
+
+# Local settings and editors
+.env
+.idea/
+.vscode/
+.DS_Store

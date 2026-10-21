@@ -1,0 +1,27 @@
+[project]
+name = "catalog-api"
+version = "1.0.0"
+description = "Product catalog API used to demonstrate automated resilience testing with Toxiproxy"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+# Plain `pytest` runs the fast unit tests. The fault-injection suite needs the
+# Docker Compose stack and is run explicitly: `pytest tests/resilience`.
+testpaths = ["tests/unit"]
+addopts = "-ra --strict-markers"
+
+[tool.coverage.run]
+source = ["catalog"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "BLE"]

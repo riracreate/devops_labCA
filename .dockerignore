@@ -1,0 +1,18 @@
+# Keep the build context small and the images free of local junk.
+.git
+.github
+.venv
+venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.coverage
+coverage.xml
+reports
+docs
+deploy
+scripts
+Jenkinsfile
+docker-compose*.yml
+*.md
