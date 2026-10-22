@@ -72,8 +72,7 @@ Close the pull request afterwards without merging.
 **Without GitHub** (on a laptop), after making the same edit:
 
 ```bash
-RUN_ID=demo-regression bash scripts/pipeline.sh build && \
-  RUN_ID=demo-regression bash scripts/pipeline.sh resilience
+bash scripts/pipeline.sh build && bash scripts/pipeline.sh resilience
 ```
 
 Undo the edit afterwards with `git checkout docker-compose.yml`.

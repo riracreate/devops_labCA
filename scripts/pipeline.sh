@@ -11,16 +11,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-RUN_ID="${RUN_ID:-$$}"
-export APP_IMAGE="${APP_IMAGE:-catalog-api:pipeline-${RUN_ID}}"
-export TEST_IMAGE="${TEST_IMAGE:-catalog-api-tests:pipeline-${RUN_ID}}"
+export APP_IMAGE="${APP_IMAGE:-catalog-api:local}"
+export TEST_IMAGE="${TEST_IMAGE:-catalog-api-tests:local}"
 export APP_VERSION="${APP_VERSION:-$(git rev-parse HEAD 2>/dev/null || echo local)}"
-# An independent Compose project and ports preserve any running demo stack and
-# its database when the resilience stage tears down its temporary test stack.
-COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-resilience-ci-${RUN_ID}}"
-export APP_HOST_PORT="${APP_HOST_PORT:-18000}"
-export TOXIPROXY_HOST_PORT="${TOXIPROXY_HOST_PORT:-18474}"
-COMPOSE=(docker compose -p "$COMPOSE_PROJECT_NAME" -f docker-compose.yml -f docker-compose.ci.yml)
+RUN_ID="${RUN_ID:-$$}"
+COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.ci.yml)
 mkdir -p reports
 
 stage() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }

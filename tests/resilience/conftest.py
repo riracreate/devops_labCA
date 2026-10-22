@@ -217,7 +217,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         "## Resilience scorecard",
         "",
         f"**{passed}/{len(entries)} scenarios passed.** "
-        "The suite checks normal behavior and injects real network faults with Toxiproxy.",
+        "Each row injects a real network fault with Toxiproxy and checks how the app reacts.",
         "",
         "| | Scenario | Fault injected | Expected | Observed |",
         "|---|---|---|---|---|",

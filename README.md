@@ -140,8 +140,6 @@ docker compose up -d --build
 - Live fault demo (keep the dashboard open next to it): `bash scripts/chaos-demo.sh`
 - Stop everything: `docker compose down` (add `-v` to also delete the database)
 
-The live fault demo creates a few sample products and restores all proxy faults when it finishes.
-
 For a create request that may have timed out, send the same `Idempotency-Key` when retrying with the same body. The store form does this automatically. A key can contain letters, digits, `_` and `-` (up to 128 characters):
 
 ```bash
@@ -156,13 +154,15 @@ curl -X POST http://localhost:8000/api/products \
 bash scripts/pipeline.sh            # or: unit | build | resilience
 ```
 
-The local pipeline uses its own Compose project and ports 18000/18474, so it leaves the development stack and its database alone. Set `APP_HOST_PORT` and `TOXIPROXY_HOST_PORT` if those ports are occupied. Reports land in `reports/`: JUnit XML, coverage, `resilience-scorecard.md` and the stack logs.
+Reports land in `reports/`: JUnit XML, coverage, `resilience-scorecard.md` and the stack logs.
 
 **Or run the resilience suite by hand**
 
 ```bash
-RUN_ID=manual bash scripts/pipeline.sh build
-RUN_ID=manual bash scripts/pipeline.sh resilience
+docker compose -f docker-compose.yml -f docker-compose.ci.yml --profile test build
+docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --wait
+docker compose -f docker-compose.yml -f docker-compose.ci.yml run --rm tester
+docker compose -f docker-compose.yml -f docker-compose.ci.yml down -v
 ```
 
 **Unit tests without Docker** (Python 3.12)
