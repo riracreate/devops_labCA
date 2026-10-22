@@ -136,13 +136,13 @@ readiness
 request "warm product" "/api/products/${warm}"
 request "uncached product" "/api/products/${cold}"
 set_proxy postgres true
-start=$(date +%s.%N)
+start=$SECONDS
 printf '  %s\n' "PostgreSQL is back; polling the uncached product until it is served..."
 for _ in $(seq 1 60); do
   if curl -fs --max-time 2 -o /dev/null "${APP_URL}/api/products/${cold}"; then break; fi
   sleep 0.25
 done
 request "uncached product" "/api/products/${cold}"
-printf '  %s%s%s\n' "$GREEN" "Recovered on its own in $(awk -v a="$start" -v b="$(date +%s.%N)" 'BEGIN { printf "%.1f", b - a }') s, no restart." "$RESET"
+printf '  %s%s%s\n' "$GREEN" "Recovered on its own in about $((SECONDS - start)) s, no restart." "$RESET"
 
 printf '\n%sDone. All faults removed.%s\n' "$BOLD" "$RESET"

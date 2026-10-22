@@ -42,7 +42,7 @@ services:
       - source: toxiproxy-proxies
         target: /config/toxiproxy.json
     ports:
-      - "8474:8474" # control API: used by the tests and the chaos demo
+      - "${TOXIPROXY_HOST_PORT:-8474}:8474" # control API: tests and chaos demo
     healthcheck:
       test: ["CMD", "/toxiproxy-cli", "list"]
       interval: 2s
@@ -74,7 +74,7 @@ services:
       CB_RESET_TIMEOUT_SECONDS: "5"
       CACHE_FRESH_SECONDS: "10"
     ports:
-      - "8000:8000"
+      - "${APP_HOST_PORT:-8000}:8000"
     depends_on:
       toxiproxy:
         condition: service_healthy
