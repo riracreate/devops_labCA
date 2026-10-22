@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Catalog API resilience monitor</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='3' cy='11' r='2' fill='%230f8a5f'/><circle cx='13' cy='11' r='2' fill='%230f8a5f'/><line x1='3' y1='11' x2='12' y2='5' stroke='%2318263a' stroke-width='2'/></svg>">
+<style>
+  :root {
+    color-scheme: light;
+    --paper: #f6f8fa;
+    --sheet: #ffffff;
+    --grid: #e3e9f0;
+    --ink: #18263a;
+    --muted: #586a80;
+    --rule: #d5dde6;
+    --live: #0f8a5f;
+    --trial: #a86b12;
+    --tripped: #c2362f;
+    --stale: #6f4fb3;
+    --idle: #a9b6c4;
+    --focus: #2f6fdf;
+    --font: "Bahnschrift", "DIN Alternate", "DIN Next", "Barlow", "Segoe UI", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --paper: #0d1522;
+      --sheet: #121c2b;
+      --grid: #1c293b;
+      --ink: #e4ebf3;
+      --muted: #93a4b8;
+      --rule: #26354a;
+      --live: #3cc48f;
+      --trial: #e2a83d;
+      --tripped: #f06a5f;
+      --stale: #a98bea;
+      --idle: #3c4c62;
+      --focus: #7aa7ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font: 17px/1.45 var(--font);
+    font-variant-numeric: tabular-nums;
+  }
+  main { max-width: 1180px; margin: 0 auto; padding: 32px 28px 48px; }
+
+  /* Header: the system's behaviour, in one sentence */
+  header { display: grid; grid-template-columns: 1fr auto; gap: 8px 32px; align-items: end; }
+  h1 { margin: 0; font-size: 1.05rem; font-weight: 600; color: var(--muted); }
+  .store-link { margin-left: 12px; font-weight: 400; color: var(--muted); }
+  .store-link:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+  .build { margin: 0; font-size: 0.95rem; color: var(--muted); text-align: right; }
+  .build b { color: var(--ink); font-weight: 600; }
+  .headline {
+    grid-column: 1 / -1;
+    margin: 6px 0 0;
+    padding-left: 18px;
+    border-left: 6px solid var(--live);
+    font-size: clamp(1.6rem, 3.4vw, 2.5rem);
+    line-height: 1.15;
+    font-weight: 600;
+    max-width: 30ch;
+  }
+  .subline { grid-column: 1 / -1; margin: 0 0 0 24px; color: var(--muted); max-width: 70ch; }
+  body[data-overall="loading"] .headline { border-color: var(--idle); }
+  body[data-overall="degraded"] .headline { border-color: var(--trial); }
+  body[data-overall="unavailable"] .headline,
+  body[data-overall="offline"] .headline { border-color: var(--tripped); }
+
+  /* The schematic, drawn on engineering paper */
+  .schematic {
+    margin: 28px 0 0;
+    background-color: var(--sheet);
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 24px 24px;
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    overflow-x: auto;
+  }
+  .schematic svg { display: block; width: 100%; height: auto; }
+  .node rect { fill: var(--sheet); stroke: var(--ink); stroke-width: 2; }
+  .node text { fill: var(--ink); font-family: var(--font); font-size: 19px; font-weight: 600; }
+  .node .note { font-size: 14px; font-weight: 400; fill: var(--muted); }
+  .node.down rect { stroke: var(--tripped); stroke-dasharray: 7 5; }
+  .node.down .note { fill: var(--tripped); }
+  .proxy rect { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 3 5; }
+  .proxy text { fill: var(--muted); font-family: var(--font); font-size: 14px; }
+  .wire { stroke: var(--live); stroke-width: 4; fill: none; stroke-linecap: round; }
+  .wire.dead { stroke: var(--idle); stroke-dasharray: 2 9; }
+  .wire.faulty { stroke: var(--trial); stroke-dasharray: 12 8; }
+  .terminal { fill: var(--sheet); stroke: var(--ink); stroke-width: 3; }
+  .blade { stroke: var(--ink); stroke-width: 5; stroke-linecap: round; }
+  .switch .blade-pivot { transition: transform 0.45s cubic-bezier(0.3, 1.5, 0.5, 1); }
+  .switch.is-open .blade-pivot { transform: rotate(-34deg); }
+  .switch.is-half .blade-pivot { transform: rotate(-14deg); }
+  .switch.is-open .blade { stroke: var(--tripped); }
+  .switch.is-half .blade { stroke: var(--trial); stroke-dasharray: 9 6; }
+  .switch text { fill: var(--muted); font-family: var(--font); font-size: 14px; }
+
+  /* Circuit details under the schematic */
+  .circuits { display: grid; grid-template-columns: 1fr 1fr; gap: 0 48px; margin-top: 26px; }
+  .circuit h2 { margin: 0; font-size: 1.15rem; font-weight: 600; }
+  .circuit h2 span { font-weight: 400; color: var(--muted); }
+  .state { margin: 2px 0 8px; font-size: 2.1rem; line-height: 1.1; font-weight: 700; color: var(--live); }
+  .state small { display: block; font-size: 1rem; font-weight: 400; color: var(--muted); }
+  .circuit[data-state="half_open"] .state { color: var(--trial); }
+  .circuit[data-state="open"] .state { color: var(--tripped); }
+  dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 3px 16px; margin: 0; }
+  dl.facts dt { color: var(--muted); }
+  dl.facts dd { margin: 0; overflow-wrap: anywhere; }
+
+  /* Traffic and counters */
+  .lower { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 48px; margin-top: 40px; }
+  .lower h2 { margin: 0 0 12px; font-size: 1.15rem; font-weight: 600; }
+  .traffic-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .traffic-head h2 { margin: 0; }
+  button {
+    font: inherit;
+    font-weight: 600;
+    padding: 9px 18px;
+    border-radius: 6px;
+    border: 2px solid var(--ink);
+    background: var(--ink);
+    color: var(--sheet);
+    cursor: pointer;
+  }
+  button[aria-pressed="true"] { background: transparent; color: var(--ink); }
+  button:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+
+  .bars-frame { position: relative; height: 120px; margin: 16px 0 12px; border-bottom: 2px solid var(--ink); }
+  .gridline { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--rule); }
+  .gridline span { position: absolute; right: 0; top: -1.3em; font-size: 0.78rem; color: var(--muted); }
+  .bars { position: absolute; inset: 0 48px 0 0; display: flex; align-items: flex-end; gap: 3px; }
+  .bar { flex: 0 0 calc(100% / 60 - 3px); border-radius: 2px 2px 0 0; background: var(--live); }
+
+  .kind-cache { --kind: var(--live); }
+  .kind-db { --kind: var(--ink); }
+  .kind-stale { --kind: var(--stale); }
+  .kind-rejected { --kind: var(--trial); }
+  .kind-failed { --kind: var(--tripped); }
+  .bar[class*="kind-"] { background: var(--kind); }
+
+  ol.log { list-style: none; margin: 0; padding: 0; }
+  ol.log li {
+    display: grid;
+    grid-template-columns: 5.2em 1fr 3.2em 5.4em;
+    gap: 12px;
+    padding: 5px 0 5px 12px;
+    border-left: 4px solid var(--kind, var(--rule));
+    border-bottom: 1px solid var(--rule);
+  }
+  ol.log .time, ol.log .code { color: var(--muted); }
+  ol.log .ms { text-align: right; }
+  .empty { color: var(--muted); margin: 8px 0 0; }
+  code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 0.92em; }
+
+  dl.counters { display: grid; grid-template-columns: 1fr max-content; margin: 0; }
+  dl.counters dt, dl.counters dd { padding: 7px 0; border-bottom: 1px solid var(--rule); margin: 0; }
+  dl.counters dd { text-align: right; font-weight: 600; font-size: 1.1rem; }
+  .legend { margin: 14px 0 0; color: var(--muted); font-size: 0.92rem; }
+
+  @media (max-width: 860px) {
+    main { padding: 20px 16px 40px; }
+    header { grid-template-columns: 1fr; }
+    .build { text-align: left; }
+    .circuits, .lower { grid-template-columns: 1fr; gap: 28px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .switch .blade-pivot { transition: none; }
+  }
+</style>
+</head>
+<body data-overall="loading">
+<main>
+  <header>
+    <h1>Catalog API resilience monitor <a class="store-link" href="/shop">Open the store</a></h1>
+    <p class="build">version <b id="version">…</b>, up <b id="uptime">…</b></p>
+    <p class="headline" id="headline" aria-live="polite">Connecting to the Catalog API</p>
+    <p class="subline" id="subline">Checking PostgreSQL and Redis.</p>
+  </header>
+
+  <figure class="schematic" aria-label="Request path from clients through the API and Toxiproxy to PostgreSQL and Redis">
+    <svg viewBox="0 0 1000 270" role="img" aria-labelledby="schematic-title">
+      <title id="schematic-title">Request path schematic with one circuit breaker per dependency</title>
+      <g class="node" id="node-client"><rect x="18" y="108" width="132" height="54" rx="6"/><text x="84" y="141" text-anchor="middle">Requests</text></g>
+      <line class="wire" id="wire-in" x1="150" y1="135" x2="250" y2="135"/>
+      <g class="node" id="node-api"><rect x="250" y="98" width="164" height="74" rx="6"/><text x="332" y="131" text-anchor="middle">Catalog API</text><text class="note" x="332" y="153" text-anchor="middle">FastAPI</text></g>
+      <line class="wire" id="wire-bus" x1="414" y1="135" x2="460" y2="135"/>
+      <polyline class="wire" id="wire-pg-a" points="460,135 460,62 540,62"/>
+      <polyline class="wire" id="wire-rd-a" points="460,135 460,208 540,208"/>
+
+      <g class="switch" id="switch-pg">
+        <g class="blade-pivot" style="transform-origin: 540px 62px"><line class="blade" x1="540" y1="62" x2="604" y2="62"/></g>
+        <circle class="terminal" cx="540" cy="62" r="7"/><circle class="terminal" cx="606" cy="62" r="7"/>
+        <text x="573" y="96" text-anchor="middle">breaker</text>
+      </g>
+      <g class="switch" id="switch-rd">
+        <g class="blade-pivot" style="transform-origin: 540px 208px"><line class="blade" x1="540" y1="208" x2="604" y2="208"/></g>
+        <circle class="terminal" cx="540" cy="208" r="7"/><circle class="terminal" cx="606" cy="208" r="7"/>
+        <text x="573" y="242" text-anchor="middle">breaker</text>
+      </g>
+
+      <line class="wire" id="wire-pg-b" x1="613" y1="62" x2="800" y2="62"/>
+      <line class="wire" id="wire-rd-b" x1="613" y1="208" x2="800" y2="208"/>
+      <g class="proxy"><rect x="664" y="22" width="86" height="226" rx="8"/><text x="707" y="138" text-anchor="middle">Toxiproxy</text></g>
+
+      <g class="node" id="node-pg"><rect x="800" y="30" width="180" height="64" rx="6"/><text x="890" y="59" text-anchor="middle">PostgreSQL</text><text class="note" id="note-pg" x="890" y="80" text-anchor="middle">primary store</text></g>
+      <g class="node" id="node-rd"><rect x="800" y="176" width="180" height="64" rx="6"/><text x="890" y="205" text-anchor="middle">Redis</text><text class="note" id="note-rd" x="890" y="226" text-anchor="middle">cache</text></g>
+    </svg>
+  </figure>
+
+  <section class="circuits" aria-label="Circuit breakers">
+    <div class="circuit" id="circuit-postgres" data-state="closed">
+      <h2>PostgreSQL <span>circuit</span></h2>
+      <p class="state"><span class="word">Closed</span><small class="hint">requests flow normally</small></p>
+      <dl class="facts">
+        <dt>Failures in a row</dt><dd class="failures">0 of 3</dd>
+        <dt>Last health probe</dt><dd class="probe">not yet</dd>
+        <dt>Last error</dt><dd class="error">none</dd>
+      </dl>
+    </div>
+    <div class="circuit" id="circuit-redis" data-state="closed">
+      <h2>Redis <span>circuit</span></h2>
+      <p class="state"><span class="word">Closed</span><small class="hint">requests flow normally</small></p>
+      <dl class="facts">
+        <dt>Failures in a row</dt><dd class="failures">0 of 3</dd>
+        <dt>Last health probe</dt><dd class="probe">not yet</dd>
+        <dt>Last error</dt><dd class="error">none</dd>
+      </dl>
+    </div>
+  </section>
+
+  <div class="lower">
+    <section aria-labelledby="traffic-title">
+      <div class="traffic-head">
+        <h2 id="traffic-title">Test traffic</h2>
+        <button id="traffic" type="button" aria-pressed="false">Send test traffic</button>
+      </div>
+      <div class="bars-frame" aria-hidden="true">
+        <div class="gridline" style="bottom: 33.3%"><span>10 ms</span></div>
+        <div class="gridline" style="bottom: 66.6%"><span>100 ms</span></div>
+        <div class="gridline" style="bottom: 100%"><span>1 s</span></div>
+        <div class="bars" id="bars"></div>
+      </div>
+      <ol class="log" id="log"></ol>
+      <p class="empty" id="empty">Send test traffic, then inject a fault from a terminal with <code>bash scripts/chaos-demo.sh</code> and watch how each request is answered.</p>
+    </section>
+
+    <section aria-labelledby="counters-title">
+      <h2 id="counters-title">Since the API started</h2>
+      <dl class="counters" id="counters"></dl>
+      <p class="legend">Bar colours: green from cache, dark from PostgreSQL, purple stale copy, amber rejected by an open circuit, red failed.</p>
+    </section>
+  </div>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const MAX_BARS = 60, MAX_ROWS = 12, TRAFFIC_GAP_MS = 400;
+const COUNTERS = [
+  ["cache_hits", "Served from cache"],
+  ["stale_served", "Served a stale copy"],
+  ["db_calls", "Database calls"],
+  ["db_retries", "Database retries"],
+  ["db_errors", "Database failures"],
+  ["db_rejected", "Rejected by open circuit"],
+  ["cache_errors", "Redis errors"],
+  ["cache_bypassed", "Redis skipped (circuit open)"],
+];
+const HEADLINES = {
+  ready: ["All systems normal", "Fresh reads come from Redis, everything else from PostgreSQL."],
+  degraded: ["Running without the cache", "Redis is slow or down, so every read goes straight to PostgreSQL. Nothing is broken, just slower."],
+  unavailable: ["PostgreSQL is unavailable", "Cached products are still served, marked as stale. Other requests fail fast with 503 instead of hanging."],
+  offline: ["Can't reach the Catalog API", "The page will reconnect automatically when the API is back."],
+};
+
+let status = null, ready = null, apiReachable = true;
+
+function fmtUptime(s) {
+  if (s < 60) return `${Math.round(s)} s`;
+  if (s < 3600) return `${Math.floor(s / 60)} min`;
+  return `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`;
+}
+function fmtMs(ms) { return ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${Math.round(ms)} ms`; }
+
+function setWire(id, mode) {
+  const el = $(id);
+  el.classList.toggle("dead", mode === "dead");
+  el.classList.toggle("faulty", mode === "faulty");
+}
+
+function renderCircuit(name, breaker, check) {
+  const box = $(`circuit-${name}`);
+  const state = breaker ? breaker.state : "closed";
+  box.dataset.state = state;
+  const wait = Math.max(1, Math.ceil(breaker ? breaker.retry_after_seconds : 0));
+  const openHint = name === "redis"
+    ? `cache skipped, reads go to PostgreSQL; next try in ${wait} s`
+    : `requests fail fast instead of waiting; next try in ${wait} s`;
+  const words = {
+    closed: ["Closed", "requests flow normally"],
+    half_open: ["Testing", "one trial request is checking for recovery"],
+    open: ["Open", openHint],
+  };
+  const [word, hint] = words[state] || words.closed;
+  box.querySelector(".word").textContent = word;
+  box.querySelector(".hint").textContent = hint;
+  if (breaker) {
+    box.querySelector(".failures").textContent = `${breaker.consecutive_failures} of ${breaker.failure_threshold}`;
+    const recent = breaker.state !== "closed" || breaker.consecutive_failures > 0;
+    const error = box.querySelector(".error");
+    const text = recent && breaker.last_error ? breaker.last_error : "none since the circuit closed";
+    error.textContent = text.length > 120 ? `${text.slice(0, 117)}…` : text;
+    error.title = text;
+  }
+  if (check) {
+    box.querySelector(".probe").textContent = check.ok ? `reachable in ${fmtMs(check.latency_ms)}` : (check.error || "unreachable");
+  }
+}
+
+function renderSchematic() {
+  const sw = { pg: status && status.breakers.postgres.state, rd: status && status.breakers.redis.state };
+  const ok = { pg: ready ? ready.checks.postgres.ok : true, rd: ready ? ready.checks.redis.ok : true };
+  for (const key of ["pg", "rd"]) {
+    const s = sw[key] || "closed";
+    const swEl = $(`switch-${key}`);
+    swEl.classList.toggle("is-open", s === "open");
+    swEl.classList.toggle("is-half", s === "half_open");
+    setWire(`wire-${key}-a`, apiReachable ? "live" : "dead");
+    setWire(`wire-${key}-b`, !apiReachable || s === "open" ? "dead" : ok[key] ? "live" : "faulty");
+    $(`node-${key}`).classList.toggle("down", apiReachable && !ok[key]);
+    const role = key === "pg" ? "primary store" : "cache";
+    $(`note-${key}`).textContent = apiReachable && !ok[key] ? "not responding" : role;
+  }
+  setWire("wire-in", apiReachable ? "live" : "dead");
+  setWire("wire-bus", apiReachable ? "live" : "dead");
+}
+
+function render() {
+  let overall = !apiReachable ? "offline" : ready ? ready.status : "loading";
+  if (apiReachable && status) {
+    if (status.breakers.postgres.state === "open") overall = "unavailable";
+    else if (overall === "ready" && status.breakers.redis.state === "open") overall = "degraded";
+  }
+  document.body.dataset.overall = overall;
+  const [head, sub] = HEADLINES[overall] || ["Connecting to the Catalog API", "Checking PostgreSQL and Redis."];
+  if ($("headline").textContent !== head) $("headline").textContent = head;
+  $("subline").textContent = sub;
+  if (status) {
+    const v = String(status.version || "dev");
+    $("version").textContent = /^[0-9a-f]{12,}$/.test(v) ? v.slice(0, 7) : v;
+    $("uptime").textContent = fmtUptime(status.uptime_seconds || 0);
+    renderCircuit("postgres", status.breakers.postgres, ready && ready.checks.postgres);
+    renderCircuit("redis", status.breakers.redis, ready && ready.checks.redis);
+    const dl = $("counters");
+    dl.replaceChildren(...COUNTERS.flatMap(([key, label]) => {
+      const dt = document.createElement("dt"); dt.textContent = label;
+      const dd = document.createElement("dd"); dd.textContent = (status.counters[key] ?? 0).toLocaleString();
+      return [dt, dd];
+    }));
+  }
+  renderSchematic();
+}
+
+async function getJson(path) {
+  const response = await fetch(path, { cache: "no-store" });
+  return response.json();
+}
+async function pollStatus() {
+  try { status = await getJson("/status"); apiReachable = true; }
+  catch { apiReachable = false; }
+  render();
+  setTimeout(pollStatus, 1000);
+}
+async function pollReady() {
+  try { ready = await getJson("/health/ready"); }
+  catch { ready = null; }
+  render();
+  setTimeout(pollReady, 1500);
+}
+
+/* ---- test traffic ---- */
+let trafficOn = false, productIds = [], sent = 0;
+
+async function refreshIds() {
+  try {
+    const response = await fetch("/api/products", { cache: "no-store" });
+    if (response.ok) productIds = (await response.json()).map((p) => p.id);
+  } catch { /* keep the ids we already have */ }
+}
+
+function classify(code, source, detail) {
+  if (code === 200 && source === "cache") return ["cache", "Fresh from cache"];
+  if (code === 200 && source === "database") return ["db", "Read from PostgreSQL"];
+  if (code === 200 && source === "stale-cache") return ["stale", "Stale copy served"];
+  if (code === 503 && detail === "circuit breaker open") return ["rejected", "Rejected fast, circuit open"];
+  if (code === 503) return ["failed", "Failed, PostgreSQL unavailable"];
+  if (code === 0) return ["failed", "No response from the API"];
+  return ["failed", `Unexpected HTTP ${code}`];
+}
+
+function addResult(kind, text, code, ms) {
+  $("empty").hidden = true;
+  const bar = document.createElement("div");
+  bar.className = `bar kind-${kind}`;
+  const height = Math.min(1, Math.max(0.04, Math.log10(Math.max(ms, 1)) / 3));  // 1 ms..1 s
+  bar.style.height = `${(height * 100).toFixed(1)}%`;
+  bar.title = `${text}: ${fmtMs(ms)}`;
+  const bars = $("bars");
+  bars.append(bar);
+  while (bars.children.length > MAX_BARS) bars.firstChild.remove();
+
+  const row = document.createElement("li");
+  row.className = `kind-${kind}`;
+  const cells = [
+    ["time", new Date().toLocaleTimeString([], { hour12: false })],
+    ["what", text],
+    ["code", code ? String(code) : "–"],
+    ["ms", fmtMs(ms)],
+  ];
+  for (const [cls, value] of cells) {
+    const span = document.createElement("span");
+    span.className = cls; span.textContent = value;
+    row.append(span);
+  }
+  const log = $("log");
+  log.prepend(row);
+  while (log.children.length > MAX_ROWS) log.lastChild.remove();
+}
+
+async function sendOne() {
+  if (!productIds.length || sent % 25 === 0) await refreshIds();
+  const hot = productIds.slice(0, 8);  // traffic concentrates on popular products
+  const id = hot.length ? hot[Math.floor(Math.random() * hot.length)] : 1;
+  const started = performance.now();
+  let code = 0, source = null, detail = null;
+  try {
+    const response = await fetch(`/api/products/${id}`, { cache: "no-store" });
+    code = response.status;
+    source = response.headers.get("X-Data-Source");
+    const body = await response.json().catch(() => ({}));
+    detail = body.detail || null;
+  } catch { code = 0; }
+  const [kind, text] = classify(code, source, detail);
+  addResult(kind, text, code, performance.now() - started);
+  sent += 1;
+}
+
+let loopGeneration = 0;
+async function trafficLoop() {
+  const mine = ++loopGeneration;  // a stop/start click retires the older loop
+  while (trafficOn && mine === loopGeneration) {
+    await sendOne();
+    await new Promise((resolve) => setTimeout(resolve, TRAFFIC_GAP_MS));
+  }
+}
+
+$("traffic").addEventListener("click", () => {
+  trafficOn = !trafficOn;
+  $("traffic").setAttribute("aria-pressed", String(trafficOn));
+  $("traffic").textContent = trafficOn ? "Stop test traffic" : "Send test traffic";
+  if (trafficOn) trafficLoop();
+});
+
+const narrow = window.matchMedia("(max-width: 640px)");
+function frameSchematic() {
+  document.querySelector(".schematic svg").setAttribute("viewBox", narrow.matches ? "430 0 570 270" : "0 0 1000 270");
+}
+narrow.addEventListener("change", frameSchematic);
+frameSchematic();
+
+pollStatus();
+pollReady();
+</script>
+</body>
+</html>

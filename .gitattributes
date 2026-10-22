@@ -1,0 +1,5 @@
+# Normalise line endings to LF everywhere. Shell scripts saved with Windows
+# (CRLF) line endings fail on Linux runners with "$'\r': command not found".
+* text=auto eol=lf
+*.png binary
+*.jpg binary

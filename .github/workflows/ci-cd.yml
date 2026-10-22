@@ -1,0 +1,252 @@
+# CI/CD pipeline: lint & unit tests -> build images -> resilience tests ->
+# publish to GHCR -> deploy with smoke test and automatic rollback.
+#
+# The image is built ONCE (stage 2). The exact same image is fault-tested in
+# stage 3, published in stage 4 and deployed in stage 5.
+
+name: CI/CD pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Pull requests: a newer push cancels the older run. main: runs queue up and
+# are never cancelled halfway through a deployment.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  APP_IMAGE: catalog-api:ci
+  TEST_IMAGE: catalog-api-tests:ci
+
+jobs:
+  lint-and-unit:
+    name: "Stage 1: Lint & unit tests"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: |
+          ruff check --output-format=github .
+          ruff format --check .
+
+      - name: Unit tests with 90% coverage gate
+        run: >-
+          pytest -p no:cacheprovider
+          --cov=catalog --cov-report=term-missing --cov-report=xml:reports/coverage.xml
+          --cov-fail-under=90 --junitxml=reports/unit-junit.xml
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          {
+            echo "## Unit test coverage"
+            echo
+            coverage report --format=markdown || echo "No coverage data was produced."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload unit test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-test-reports
+          path: reports/
+          if-no-files-found: ignore
+
+  build:
+    name: "Stage 2: Build Docker images"
+    needs: lint-and-unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build production image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: runtime
+          load: true
+          tags: ${{ env.APP_IMAGE }}
+          build-args: APP_VERSION=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=runtime
+          cache-to: type=gha,mode=max,scope=runtime
+
+      - name: Build test-runner image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: test
+          load: true
+          tags: ${{ env.TEST_IMAGE }}
+          cache-from: type=gha,scope=test
+          cache-to: type=gha,mode=max,scope=test
+
+      - name: Inspect the production image
+        run: |
+          docker image ls catalog-api
+          echo "Runs as user id: $(docker run --rm "$APP_IMAGE" id -u)"
+
+      - name: Export images for the next stages
+        run: docker save "$APP_IMAGE" "$TEST_IMAGE" | gzip -1 > images.tar.gz
+
+      - name: Upload images
+        uses: actions/upload-artifact@v7
+        with:
+          name: docker-images
+          path: images.tar.gz
+          retention-days: 1
+          compression-level: 0
+
+  resilience:
+    name: "Stage 3: Resilience tests (Toxiproxy)"
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Docker Compose reads this: the base stack plus the CI overlay.
+      COMPOSE_FILE: docker-compose.yml:docker-compose.ci.yml
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: docker-images
+
+      - name: Load the images built in stage 2
+        run: gunzip -c images.tar.gz | docker load
+
+      - name: Start PostgreSQL, Redis, Toxiproxy and the app
+        run: docker compose up -d --no-build --wait
+
+      - name: Show running services
+        run: docker compose ps
+
+      - name: Run the fault-injection suite
+        run: docker compose run --name resilience-tester tester
+
+      - name: Collect reports and logs
+        if: always()
+        run: |
+          mkdir -p reports
+          docker cp resilience-tester:/app/reports/. reports/ || true
+          docker compose logs --no-color --timestamps > reports/stack-logs.txt || true
+
+      - name: Publish the resilience scorecard
+        if: always()
+        run: |
+          if [ -f reports/resilience-scorecard.md ]; then
+            cat reports/resilience-scorecard.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload resilience reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: resilience-reports
+          path: reports/
+          if-no-files-found: ignore
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v --remove-orphans
+
+  publish:
+    name: "Stage 4: Publish image to GHCR"
+    needs: resilience
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.push.outputs.image }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: docker-images
+
+      - name: Load the image that passed the resilience tests
+        run: gunzip -c images.tar.gz | docker load
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag and push
+        id: push
+        run: |
+          repo="ghcr.io/${GITHUB_REPOSITORY,,}"
+          tag="sha-${GITHUB_SHA::7}"
+          docker tag "$APP_IMAGE" "$repo:$tag"
+          docker tag "$APP_IMAGE" "$repo:latest"
+          docker push "$repo:$tag"
+          docker push "$repo:latest"
+          echo "image=$repo:$tag" >> "$GITHUB_OUTPUT"
+          echo "Published \`$repo:$tag\`" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: "Stage 5: Deploy"
+    needs: publish
+    # Runs once you register a self-hosted runner with the label "deploy" and set
+    # the repository variable DEPLOY_ENABLED=true (see README, "Deployment").
+    if: github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+    runs-on: [self-hosted, deploy]
+    timeout-minutes: 15
+    environment:
+      name: production
+      url: ${{ vars.APP_PUBLIC_URL || 'http://localhost:8080' }}
+    permissions:
+      contents: read
+      packages: read
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Deploy, smoke test, roll back on failure
+        env:
+          APP_IMAGE: ${{ needs.publish.outputs.image }}
+          EXPECTED_VERSION: ${{ github.sha }}
+          DB_PASSWORD: ${{ secrets.PROD_DB_PASSWORD }}
+        run: bash scripts/deploy.sh
+
+      - name: Deployment summary
+        env:
+          APP_IMAGE: ${{ needs.publish.outputs.image }}
+          APP_URL: ${{ vars.APP_PUBLIC_URL || 'http://localhost:8080' }}
+        run: echo "Deployed \`$APP_IMAGE\` to $APP_URL" >> "$GITHUB_STEP_SUMMARY"

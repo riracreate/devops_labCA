@@ -1,0 +1,4 @@
+# Custom label of the self-hosted runner used by the Deploy stage.
+self-hosted-runner:
+  labels:
+    - deploy

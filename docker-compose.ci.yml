@@ -1,0 +1,37 @@
+# CI overlay: faster resilience settings plus the containerised test runner.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --build --wait
+#   docker compose -f docker-compose.yml -f docker-compose.ci.yml run --rm tester
+#   docker compose -f docker-compose.yml -f docker-compose.ci.yml down -v
+#
+# The tester runs inside the Compose network and reaches the app and Toxiproxy
+# by service name, so nothing but Docker is needed on the CI machine.
+
+services:
+  app:
+    environment:
+      CB_RESET_TIMEOUT_SECONDS: "2" # recovery tests finish in ~2 s
+      CACHE_FRESH_SECONDS: "1" # stale-cache tests only wait 1 s
+
+  tester:
+    build:
+      context: .
+      target: test
+    image: ${TEST_IMAGE:-catalog-api-tests:local}
+    profiles: ["test"] # never started by `up`; only by `run tester`
+    environment:
+      APP_URL: http://app:8000
+      TOXIPROXY_URL: http://toxiproxy:8474
+      REPORTS_DIR: /app/reports
+    command:
+      - pytest
+      - tests/resilience
+      - -v
+      - -p
+      - no:cacheprovider
+      - --junitxml=/app/reports/resilience-junit.xml
+    depends_on:
+      app:
+        condition: service_healthy
+      toxiproxy:
+        condition: service_healthy

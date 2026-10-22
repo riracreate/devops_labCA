@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Catalog store</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M2 2h6l6 6-6 6-6-6z' fill='%2318263a'/><circle cx='5' cy='5' r='1.4' fill='white'/></svg>">
+<style>
+  :root {
+    color-scheme: light;
+    --paper: #f6f8fa;
+    --sheet: #ffffff;
+    --ink: #18263a;
+    --muted: #586a80;
+    --rule: #d5dde6;
+    --live: #0f8a5f;
+    --trial: #a86b12;
+    --tripped: #c2362f;
+    --stale-bg: #fdf3e1;
+    --stale-ink: #6b4708;
+    --down-bg: #fbe9e7;
+    --down-ink: #7a1f19;
+    --focus: #2f6fdf;
+    --font: "Bahnschrift", "DIN Alternate", "DIN Next", "Barlow", "Segoe UI", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --paper: #0d1522;
+      --sheet: #121c2b;
+      --ink: #e4ebf3;
+      --muted: #93a4b8;
+      --rule: #26354a;
+      --live: #3cc48f;
+      --trial: #e2a83d;
+      --tripped: #f06a5f;
+      --stale-bg: #2b2312;
+      --stale-ink: #f1d39a;
+      --down-bg: #2d1715;
+      --down-ink: #f5b3ac;
+      --focus: #7aa7ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 17px/1.45 var(--font); }
+  a { color: inherit; }
+  a:focus-visible, button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+  .top {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    max-width: 1180px; margin: 0 auto; padding: 22px 28px 0;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.25rem; }
+  .brand svg { width: 26px; height: 26px; }
+  .top a { color: var(--muted); font-size: 0.95rem; }
+
+  .banner {
+    max-width: 1180px; margin: 18px auto 0; padding: 0 28px;
+  }
+  .banner p {
+    margin: 0; padding: 12px 16px; border-radius: 8px; border-left: 5px solid;
+  }
+  .banner[data-kind="stale"] p { background: var(--stale-bg); color: var(--stale-ink); border-color: var(--trial); }
+  .banner[data-kind="down"] p { background: var(--down-bg); color: var(--down-ink); border-color: var(--tripped); }
+  .banner strong { font-weight: 700; }
+
+  main { max-width: 1180px; margin: 0 auto; padding: 24px 28px 56px; }
+  .heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  h1 { margin: 0; font-size: clamp(1.8rem, 3.6vw, 2.6rem); line-height: 1.1; }
+  .meta { margin: 6px 0 0; color: var(--muted); }
+  .meta .source-cache { color: var(--live); font-weight: 600; }
+  .meta .source-database { color: var(--ink); font-weight: 600; }
+  .meta .source-stale { color: var(--trial); font-weight: 600; }
+
+  button {
+    font: inherit; font-weight: 600; padding: 9px 18px; border-radius: 6px; cursor: pointer;
+    border: 2px solid var(--ink); background: var(--ink); color: var(--sheet);
+  }
+  button.quiet { background: transparent; color: var(--ink); }
+  button:disabled { opacity: 0.55; cursor: wait; }
+
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 40px; margin-top: 26px; align-items: start; }
+
+  .grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 16px; }
+  .product {
+    background: var(--sheet); border: 1px solid var(--rule); border-radius: 8px;
+    padding: 16px 18px 18px; display: flex; flex-direction: column; min-height: 168px;
+  }
+  .product.is-new { border-color: var(--live); box-shadow: inset 0 0 0 1px var(--live); }
+  .sku { margin: 0; font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .product h3 { margin: 4px 0 0; font-size: 1.08rem; line-height: 1.25; overflow-wrap: anywhere; }
+  .price { margin: auto 0 0; padding-top: 14px; font-size: 1.7rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+  .stock { margin: 2px 0 0; font-size: 0.92rem; color: var(--muted); }
+  .stock.low { color: var(--trial); font-weight: 600; }
+  .stock.none { color: var(--tripped); font-weight: 600; }
+  .empty { color: var(--muted); grid-column: 1 / -1; padding: 28px 0; }
+
+  .add { background: var(--sheet); border: 1px solid var(--rule); border-radius: 8px; padding: 18px 20px 20px; position: sticky; top: 16px; }
+  .add h2 { margin: 0 0 4px; font-size: 1.15rem; }
+  .add .note { margin: 0 0 14px; color: var(--muted); font-size: 0.92rem; }
+  label { display: block; margin: 0 0 12px; font-weight: 600; font-size: 0.95rem; }
+  input {
+    display: block; width: 100%; margin-top: 5px; padding: 9px 11px; font: inherit; font-weight: 400;
+    color: var(--ink); background: var(--paper); border: 1px solid var(--rule); border-radius: 6px;
+  }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .add button { width: 100%; margin-top: 4px; }
+  .form-msg { min-height: 1.45em; margin: 12px 0 0; font-size: 0.95rem; }
+  .form-msg.ok { color: var(--live); }
+  .form-msg.err { color: var(--tripped); }
+
+  @media (max-width: 820px) {
+    .top, .banner, main { padding-left: 16px; padding-right: 16px; }
+    .layout { grid-template-columns: 1fr; }
+    .add { position: static; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 2h6l6 6-6 6-6-6z" fill="currentColor"/><circle cx="5" cy="5" r="1.4" fill="var(--paper)"/></svg>
+    Catalog
+  </div>
+  <a href="/">Resilience monitor</a>
+</header>
+
+<div class="banner" id="banner" hidden role="status" aria-live="polite"><p></p></div>
+
+<main>
+  <div class="heading">
+    <div>
+      <h1>Products</h1>
+      <p class="meta" id="meta">Loading the catalog…</p>
+    </div>
+    <button class="quiet" id="refresh" type="button">Refresh</button>
+  </div>
+
+  <div class="layout">
+    <section aria-labelledby="products-title">
+      <h2 id="products-title" hidden>Product list</h2>
+      <ul class="grid" id="grid"></ul>
+    </section>
+
+    <aside class="add" aria-labelledby="add-title">
+      <h2 id="add-title">Add a product</h2>
+      <p class="note">Saved to PostgreSQL. New products appear in the list straight away.</p>
+      <form id="add-form" novalidate>
+        <label>Name<input id="f-name" name="name" maxlength="120" autocomplete="off" required></label>
+        <div class="row">
+          <label>Price (₹)<input id="f-price" name="price" type="number" min="0" step="0.01" inputmode="decimal" required></label>
+          <label>Stock<input id="f-stock" name="stock" type="number" min="0" step="1" inputmode="numeric" value="10"></label>
+        </div>
+        <button type="submit" id="add-button">Add product</button>
+        <p class="form-msg" id="form-msg" role="status" aria-live="polite"></p>
+      </form>
+    </aside>
+  </div>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const REFRESH_MS = 5000;
+const rupees = new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2, minimumFractionDigits: 0 });
+
+let products = [];
+let loadedAt = null;
+let loading = false;
+let nextLoadAt = 0;
+let problem = null;  // null | { kind, text } where text may contain {s} for the countdown
+let highlightId = null;
+let pendingWrite = null;
+
+function newWriteKey() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function retryAfterSeconds(response, fallback) {
+  const value = Number(response.headers.get("Retry-After"));
+  return Number.isFinite(value) && value > 0 ? Math.min(value, 30) : fallback;
+}
+
+function renderBanner() {
+  const banner = $("banner");
+  if (!problem) { banner.hidden = true; return; }
+  const seconds = Math.max(0, Math.ceil((nextLoadAt - Date.now()) / 1000));
+  banner.dataset.kind = problem.kind;
+  banner.querySelector("p").textContent = problem.text.replace("{s}", String(seconds));
+  banner.hidden = false;
+}
+
+function renderProducts() {
+  const grid = $("grid");
+  if (!products.length) {
+    const li = document.createElement("li");
+    li.className = "empty";
+    li.textContent = loadedAt ? "No products yet. Add the first one." : "The catalog isn’t available yet.";
+    grid.replaceChildren(li);
+    return;
+  }
+  grid.replaceChildren(...products.map((p) => {
+    const li = document.createElement("li");
+    li.className = "product" + (p.id === highlightId ? " is-new" : "");
+    const stockClass = p.stock === 0 ? "stock none" : p.stock < 10 ? "stock low" : "stock";
+    const stockText = p.stock === 0 ? "Out of stock" : p.stock < 10 ? `Only ${p.stock} left` : `${p.stock} in stock`;
+    for (const [tag, cls, text] of [
+      ["p", "sku", `Item ${p.id}`],
+      ["h3", "", p.name],
+      ["p", "price", rupees.format(p.price)],
+      ["p", stockClass, stockText],
+    ]) {
+      const el = document.createElement(tag);
+      if (cls) el.className = cls;
+      el.textContent = text;
+      li.append(el);
+    }
+    return li;
+  }));
+}
+
+function setMeta(parts) {
+  $("meta").replaceChildren(...parts.map((part) => {
+    if (typeof part === "string") return document.createTextNode(part);
+    const span = document.createElement("span");
+    span.className = part.cls; span.textContent = part.text;
+    return span;
+  }));
+}
+
+async function loadProducts() {
+  if (loading) return;
+  loading = true;
+  $("refresh").disabled = true;
+  const started = performance.now();
+  try {
+    const response = await fetch("/api/products", { cache: "no-store" });
+    const ms = Math.round(performance.now() - started);
+    if (response.ok) {
+      products = await response.json();
+      loadedAt = new Date();
+      const source = response.headers.get("X-Data-Source");
+      const count = `${products.length} product${products.length === 1 ? "" : "s"}. `;
+      if (source === "stale-cache") {
+        problem = { kind: "stale", text: "PostgreSQL is unavailable, so you’re seeing the last saved copy of the catalog. Prices and stock may be out of date." };
+        setMeta([count, { cls: "source-stale", text: "Saved copy" }, ` served in ${ms} ms.`]);
+      } else {
+        problem = null;
+        const label = source === "cache" ? { cls: "source-cache", text: "Served from the cache" } : { cls: "source-database", text: "Served by PostgreSQL" };
+        setMeta([count, label, ` in ${ms} ms.`]);
+      }
+      nextLoadAt = Date.now() + REFRESH_MS;
+    } else if (response.status === 503) {
+      const wait = retryAfterSeconds(response, 3);
+      nextLoadAt = Date.now() + wait * 1000;
+      const since = loadedAt ? ` Showing what was loaded at ${loadedAt.toLocaleTimeString([], { hour12: false })}.` : "";
+      problem = { kind: "down", text: `The catalog can’t be loaded right now because the database is unavailable.${since} Trying again in {s} s.` };
+      setMeta([`Database unavailable. The server answered in ${ms} ms instead of making you wait.`]);
+    } else {
+      nextLoadAt = Date.now() + REFRESH_MS;
+      problem = { kind: "down", text: `Unexpected response from the store (HTTP ${response.status}). Trying again in {s} s.` };
+    }
+  } catch {
+    nextLoadAt = Date.now() + REFRESH_MS;
+    problem = { kind: "down", text: "Can’t reach the store. Trying again in {s} s." };
+    setMeta(["Not connected."]);
+  } finally {
+    loading = false;
+    $("refresh").disabled = false;
+    renderProducts();
+    renderBanner();
+  }
+}
+
+$("add-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const message = $("form-msg");
+  const name = $("f-name").value.trim();
+  const priceText = $("f-price").value;
+  const price = Number(priceText);
+  const stock = $("f-stock").value === "" ? 0 : Number($("f-stock").value);
+  if (!name || priceText === "" || !(price >= 0) || !(stock >= 0) || !Number.isInteger(stock)) {
+    message.className = "form-msg err";
+    message.textContent = "Enter a name, a price of ₹0 or more, and a whole-number stock.";
+    return;
+  }
+  $("add-button").disabled = true;
+  message.className = "form-msg";
+  message.textContent = "Saving…";
+  const payload = { name, price, stock };
+  const signature = JSON.stringify(payload);
+  if (!pendingWrite || pendingWrite.signature !== signature) {
+    pendingWrite = { signature, key: newWriteKey() };
+  }
+  try {
+    const response = await fetch("/api/products", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": pendingWrite.key },
+      body: signature,
+    });
+    if (response.status === 201) {
+      const created = await response.json();
+      pendingWrite = null;
+      highlightId = created.id;
+      message.className = "form-msg ok";
+      message.textContent = `Added “${created.name}”.`;
+      form.reset();
+      $("f-stock").value = "10";
+      await loadProducts();
+    } else if (response.status === 503) {
+      message.className = "form-msg err";
+      message.textContent = `Not saved: the database is unavailable. Try again in ${retryAfterSeconds(response, 3)} s.`;
+    } else if (response.status === 422) {
+      message.className = "form-msg err";
+      message.textContent = "Not saved: check the name, price and stock.";
+    } else if (response.status === 409) {
+      pendingWrite = null;
+      message.className = "form-msg err";
+      message.textContent = "Not saved: this request key belongs to a different product. Try again.";
+    } else {
+      message.className = "form-msg err";
+      message.textContent = `Not saved: unexpected response (HTTP ${response.status}).`;
+    }
+  } catch {
+    message.className = "form-msg err";
+    message.textContent = "Not saved: can’t reach the store.";
+  } finally {
+    $("add-button").disabled = false;
+  }
+});
+
+$("refresh").addEventListener("click", () => { nextLoadAt = 0; loadProducts(); });
+
+// One ticker drives both the countdown in the banner and the automatic refresh.
+setInterval(() => {
+  if (Date.now() >= nextLoadAt) loadProducts();
+  else renderBanner();
+}, 1000);
+loadProducts();
+</script>
+</body>
+</html>
