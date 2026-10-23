@@ -7,7 +7,7 @@
 // Optional publishing: set a global environment variable REGISTRY_IMAGE
 // (for example docker.io/yourname/catalog-api) and add a username/password
 // credential with the id "registry-credentials".
-
+//new
 pipeline {
   agent any
 
